@@ -7,9 +7,10 @@ from ray.rllib.algorithms.dqn.dqn import *
 class custom_trainer(DQN):
     _allow_unknown_configs = True
 
-    def get_default_policy_class(self, config):
-        return MyTorchPolicy
-
+    def __init__(self, **kwargs):
+        self.td_err = { [] for agent in self.config["multiagent"]["policies"].keys()}
+        super().__init__(**kwargs)
+    
     @override(DQN)
     def training_step(self) -> ResultDict:
         """DQN training iteration function.
@@ -62,7 +63,26 @@ class custom_trainer(DQN):
                     self.config["train_batch_size"],
                     count_by_agent_steps=self._by_agent_steps,
                 )
-
+                
+                ####### Mutual sampling #######             
+                sample_weight = {}
+                for agent in new_sample_batch.policy_batches:
+                    agent_policy = self.workers.local_worker().policy_map[agent]
+                    batch_agent = new_sample_batch[agent]
+                    td_err_tensors = agent_policy.compute_td_error(batch_agent["obs"], batch_agent["actions"], batch_agent["rewards"],
+                                  batch_agent["new_obs"], batch_agent["dones"], batch_agent["weights"]).detach().cpu()
+                    td_abs_list = list(map(abs, td_err_tensors.tolist()))
+                    # Add curr experiences to save td-errors
+                    self.td_err[agent].append(sum(td_abs_list))
+                
+                    # give weight to each agent according to his td-err
+                    sample_weight[agent] = 
+                    
+                for agent in new_sample_batch.policy_batches:
+                    agent_policy = self.workers.local_worker().policy_map[agent]
+                    this_agent_received_samples = SampleBatch.concat_samples([self.local_replay_buffer.sample(sample_weight[agent],agent) for agent in sample_weight])
+                    
+                    
                 # Postprocess batch before we learn on it
                 post_fn = self.config.get("before_learn_on_batch") or (lambda b, *a: b)
                 train_batch = post_fn(train_batch, self.workers, self.config)
