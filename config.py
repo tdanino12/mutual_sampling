@@ -117,6 +117,10 @@ def config_pursuit_dqn(args):
     config["majority_memory"] = 3500
     config["pure_majority"] = "false"
 
+    config["mutual_batch_addition"] = 18
+    config["mutual_leaders"] = 3
+    config["mutual_sampling"] = True
+
     config["min_sample_timesteps_per_iteration"] = _PURSUIT_N_TIMESTEPS / _EVAL_RESOLUTION
     config["min_time_s_per_iteration"] = 0
     config["evaluation_interval"] = 20

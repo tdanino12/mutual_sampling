@@ -85,6 +85,12 @@ def parse_args(arg_string=None):
         help="if set to true, q values are not summed",
     )
 
+    parser.add_argument(
+        "--mutual_sampling",
+        default="true",
+        help="if set to true, mutual sampling is enabled",
+    )
+
     # arguments for battle environment
     parser.add_argument("--env_battle_map_size", type=int, required=False, help="Override map size for battle?")
 
@@ -129,6 +135,9 @@ def main(args, num_cpus, group: str = "suPER",
     if args.majority_full == "true":
         config["pure_majority"] = "true"
 
+    if args.mutual_sampling == "false":
+        config["train_batch_size"] = (32+config["mutual_batch_addition"])*config["env_config"]["num_agents"]
+        config["mutual_sampling"] = False
 
     ray.init(num_cpus=num_cpus, local_mode=args.ray_local_mode, include_dashboard=False)
     curr_folder = os.path.dirname(os.path.realpath(__file__))

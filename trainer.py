@@ -1,15 +1,15 @@
 from policy import DQNTorchPolicy as MyTorchPolicy
 
 from ray.rllib.algorithms.dqn.dqn import *
-
+from ray.rllib.policy.sample_batch import MultiAgentBatch, SampleBatch
 
 # Create a new Algorithm using the Policy defined above.
 class custom_trainer(DQN):
     _allow_unknown_configs = True
 
     def __init__(self, **kwargs):
-        self.td_err = { [] for agent in self.config["multiagent"]["policies"].keys()}
         super().__init__(**kwargs)
+        self.td_err = {agent: [] for agent in self.config["multiagent"]["policies"].keys()}
     
     @override(DQN)
     def training_step(self) -> ResultDict:
@@ -64,25 +64,38 @@ class custom_trainer(DQN):
                     count_by_agent_steps=self._by_agent_steps,
                 )
                 
-                ####### Mutual sampling #######             
-                sample_weight = {}
-                for agent in new_sample_batch.policy_batches:
-                    agent_policy = self.workers.local_worker().policy_map[agent]
-                    batch_agent = new_sample_batch[agent]
-                    td_err_tensors = agent_policy.compute_td_error(batch_agent["obs"], batch_agent["actions"], batch_agent["rewards"],
-                                  batch_agent["new_obs"], batch_agent["dones"], batch_agent["weights"]).detach().cpu()
-                    td_abs_list = list(map(abs, td_err_tensors.tolist()))
-                    # Add curr experiences to save td-errors
-                    self.td_err[agent].append(sum(td_abs_list))
-                
-                    # give weight to each agent according to his td-err
-                    sample_weight[agent] = 
-                    
-                for agent in new_sample_batch.policy_batches:
-                    agent_policy = self.workers.local_worker().policy_map[agent]
-                    this_agent_received_samples = SampleBatch.concat_samples([self.local_replay_buffer.sample(sample_weight[agent],agent) for agent in sample_weight])
-                ###############################    
-                    
+                ####### Mutual sampling #######
+                if self.config["mutual_sampling"]:
+                    sample_weight, performers_sorted = {}, []
+
+                    for agent in new_sample_batch.policy_batches:
+                        # get policy object for specific agent
+                        agent_policy = self.workers.local_worker().policy_map[agent]
+
+                        # get td_errors from last training batch
+                        batch_agent = train_batch[agent]
+                        td_err_tensors = agent_policy.compute_td_error(batch_agent["obs"], batch_agent["actions"], batch_agent["rewards"],
+                                      batch_agent["new_obs"], batch_agent["dones"], batch_agent["weights"]).detach().cpu()
+
+
+                        # Add curr experiences to saved td-errors
+                        td_abs_list = list(map(abs, td_err_tensors.tolist()))
+                        self.td_err[agent].append(sum(td_abs_list))
+
+                        # sort agents according to their td error
+                        memory = self.config["majority_memory"]
+                        # give weight to each agent according to his td-err
+                        sample_weight[agent] = sum(self.td_err[agent][-memory:]) / len(self.td_err[agent][-memory:])
+                        performers_sorted = [k for k, v in sorted(sample_weight.items(), key=lambda item: item[1])]
+
+                    mini_sample_size = int(self.config["mutual_batch_addition"]/self.config["mutual_leaders"])
+
+                    leaders_batch = SampleBatch.concat_samples([self.local_replay_buffer.sample(mini_sample_size,agent) \
+                                                               for agent in performers_sorted[-self.config["mutual_leaders"]:]])
+
+                    for agent in new_sample_batch.policy_batches:
+                        train_batch[agent].concat_samples([leaders_batch])
+
                 # Postprocess batch before we learn on it
                 post_fn = self.config.get("before_learn_on_batch") or (lambda b, *a: b)
                 train_batch = post_fn(train_batch, self.workers, self.config)
